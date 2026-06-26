@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mini 2D Battle Royale</title>
+    <title>Mini Free Fire</title>
     <style>
         body {
             margin: 0;
@@ -24,13 +24,25 @@
         }
         #ui {
             margin-bottom: 10px;
-            font-size: 20px;
+            font-size: 18px;
+        }
+        #restartBtn {
+            display: none;
+            margin-top: 8px;
+            padding: 6px 12px;
+            font-size: 16px;
+            cursor: pointer;
+            background: #fff;
+            color: #222;
+            border: none;
+            border-radius: 4px;
         }
     </style>
 </head>
 <body>
 
-    <div id="ui">Alive: <span id="aliveCount">10</span> | Health: <span id="health">100</span>%</div>
+    <div id="ui">Mini Free Fire — Alive: <span id="aliveCount">10</span> | Health: <span id="health">100</span>% | Weapon: <span id="weaponName">Pistol</span></div>
+    <button id="restartBtn">Restart</button>
     <canvas id="gameCanvas" width="800" height="600"></canvas>
 
     <script>
@@ -38,16 +50,27 @@
         const ctx = canvas.getContext("2d");
         const aliveCountUI = document.getElementById("aliveCount");
         const healthUI = document.getElementById("health");
+        const weaponNameUI = document.getElementById("weaponName");
+        const restartBtn = document.getElementById('restartBtn');
+
+        // Game state
+        let lastTime = performance.now();
 
         // Player setup
-        const player = {
-            x: canvas.width / 2,
-            y: canvas.height / 2,
-            radius: 15,
-            color: '#00EAFF',
-            speed: 4,
-            health: 100
-        };
+        let player = createPlayer();
+
+        function createPlayer() {
+            return {
+                x: canvas.width / 2,
+                y: canvas.height / 2,
+                radius: 15,
+                color: '#00EAFF',
+                speed: 4,
+                health: 100,
+                weapon: weapons.pistol,
+                lastShot: 0
+            };
+        }
 
         const keys = {};
         const bullets = [];
@@ -57,50 +80,117 @@
         // Mouse tracking for shooting
         const mouse = { x: 0, y: 0 };
 
+        // Weapons
+        const weapons = {
+            pistol: { name: 'Pistol', fireRate: 300, bulletSpeed: 7, damage: 25, spread: 0 },
+            rifle: { name: 'Rifle', fireRate: 120, bulletSpeed: 10, damage: 18, spread: 0.02 },
+            shotgun: { name: 'Shotgun', fireRate: 700, bulletSpeed: 8, damage: 10, spread: 0.4, pellets: 6 }
+        };
+
+        // Pickups
+        const pickups = [];
+        function spawnPickups() {
+            const types = ['pistol', 'rifle', 'shotgun'];
+            for (let i = 0; i < 4; i++) {
+                const type = types[Math.floor(Math.random() * types.length)];
+                pickups.push({
+                    x: Math.random() * (canvas.width - 40) + 20,
+                    y: Math.random() * (canvas.height - 40) + 20,
+                    size: 12,
+                    type
+                });
+            }
+        }
+
+        // Safe zone (shrinking circle)
+        const safeZone = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            radius: Math.max(canvas.width, canvas.height) * 0.75,
+            minRadius: 80,
+            shrinkRate: 2 / 1000, // pixels per ms
+            damagePerSecond: 12 // damage per second outside
+        };
+
         // Spawn Enemies (Bots)
         function spawnEnemies(count) {
+            enemies.length = 0;
             for (let i = 0; i < count; i++) {
                 enemies.push({
                     x: Math.random() * canvas.width,
                     y: Math.random() * canvas.height,
                     radius: 15,
                     color: '#FF3333',
-                    speed: 1.5 + Math.random() * 1.5,
+                    speed: 1.2 + Math.random() * 1.6,
                     health: 50,
-                    shootCooldown: Math.random() * 100
+                    shootCooldown: Math.random() * 120
                 });
             }
         }
+
+        function resetGame() {
+            bullets.length = 0;
+            pickups.length = 0;
+            spawnPickups();
+            spawnEnemies(9);
+            player = createPlayer();
+            safeZone.radius = Math.max(canvas.width, canvas.height) * 0.75;
+            gameOver = false;
+            restartBtn.style.display = 'none';
+            lastTime = performance.now();
+            loop();
+        }
+
+        spawnPickups();
         spawnEnemies(9); // 9 bots + 1 player = 10 players total
 
         // Event Listeners
         window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
         window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
-        
+
         canvas.addEventListener('mousemove', e => {
             const rect = canvas.getBoundingClientRect();
             mouse.x = e.clientX - rect.left;
             mouse.y = e.clientY - rect.top;
         });
 
-        canvas.addEventListener('click', () => {
+        canvas.addEventListener('mousedown', (e) => {
             if (gameOver) return;
-            // Shoot bullet towards mouse
-            const angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
-            bullets.push({
-                x: player.x,
-                y: player.y,
-                dx: Math.cos(angle) * 7,
-                dy: Math.sin(angle) * 7,
-                radius: 5,
-                color: '#FFFF00',
-                fromPlayer: true
-            });
+            mouseDown = true;
+            handleShooting();
         });
 
+        // Also allow hold-to-shoot for rifle using requestAnimationFrame timing
+        function handleShooting(now = performance.now()) {
+            const w = player.weapon;
+            if (now - player.lastShot < w.fireRate) return;
+            player.lastShot = now;
+
+            if (w.name === 'Shotgun') {
+                for (let p = 0; p < (w.pellets || 6); p++) {
+                    const angle = Math.atan2(mouse.y - player.y, mouse.x - player.x) + (Math.random() - 0.5) * w.spread;
+                    bullets.push(createBullet(player.x, player.y, Math.cos(angle) * w.bulletSpeed, Math.sin(angle) * w.bulletSpeed, w.damage));
+                }
+            } else {
+                const baseAngle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+                const angle = baseAngle + (Math.random() - 0.5) * w.spread;
+                bullets.push(createBullet(player.x, player.y, Math.cos(angle) * w.bulletSpeed, Math.sin(angle) * w.bulletSpeed, w.damage));
+            }
+        }
+
+        function createBullet(x, y, dx, dy, damage, fromPlayer = true) {
+            return { x, y, dx, dy, radius: 5, color: fromPlayer ? '#FFFF00' : '#FF9900', fromPlayer, damage };
+        }
+
         // Game Loop
-        function update() {
+        function update(delta) {
             if (gameOver) return;
+
+            // Shrink safe zone gradually
+            if (safeZone.radius > safeZone.minRadius) {
+                safeZone.radius -= safeZone.shrinkRate * delta;
+                if (safeZone.radius < safeZone.minRadius) safeZone.radius = safeZone.minRadius;
+            }
 
             // Player Movement
             if (keys['w'] || keys['arrowup']) player.y -= player.speed;
@@ -111,6 +201,17 @@
             // Keep player in bounds
             player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
             player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
+
+            // Pickup collisions (player)
+            for (let i = pickups.length - 1; i >= 0; i--) {
+                const p = pickups[i];
+                const dist = Math.hypot(player.x - p.x, player.y - p.y);
+                if (dist < player.radius + p.size) {
+                    player.weapon = weapons[p.type];
+                    weaponNameUI.textContent = player.weapon.name;
+                    pickups.splice(i, 1);
+                }
+            }
 
             // Update Bullets
             for (let i = bullets.length - 1; i >= 0; i--) {
@@ -130,7 +231,7 @@
                         const e = enemies[j];
                         const dist = Math.hypot(b.x - e.x, b.y - e.y);
                         if (dist < b.radius + e.radius) {
-                            e.health -= 25;
+                            e.health -= b.damage || 10;
                             bullets.splice(i, 1);
                             if (e.health <= 0) enemies.splice(j, 1);
                             break;
@@ -140,11 +241,12 @@
                     // Check enemy bullet hitting player
                     const dist = Math.hypot(b.x - player.x, b.y - player.y);
                     if (dist < b.radius + player.radius) {
-                        player.health -= 10;
+                        player.health -= b.damage || 10;
                         bullets.splice(i, 1);
                         if (player.health <= 0) {
+                            player.health = 0;
                             gameOver = true;
-                            alert("BOOYAH! Just kidding, you lost. Try again!");
+                            showLose();
                         }
                     }
                 }
@@ -152,12 +254,13 @@
 
             // Update Enemies (AI)
             enemies.forEach(e => {
+                if (e.health <= 0) return;
                 // Move towards player slowly
                 const angle = Math.atan2(player.y - e.y, player.x - e.x);
                 e.x += Math.cos(angle) * e.speed;
                 e.y += Math.sin(angle) * e.speed;
 
-                // Bot shooting AI
+                // Bot shooting AI (simple)
                 e.shootCooldown--;
                 if (e.shootCooldown <= 0) {
                     bullets.push({
@@ -167,24 +270,89 @@
                         dy: Math.sin(angle) * 5,
                         radius: 5,
                         color: '#FF9900',
-                        fromPlayer: false
+                        fromPlayer: false,
+                        damage: 10
                     });
                     e.shootCooldown = 60 + Math.random() * 60; // reset cooldown
                 }
+
+                // Enemy pickup collisions (optional): let them pick up sometimes
+                for (let i = pickups.length - 1; i >= 0; i--) {
+                    const p = pickups[i];
+                    const dist = Math.hypot(e.x - p.x, e.y - p.y);
+                    if (dist < e.radius + p.size && Math.random() < 0.002) {
+                        // enemy picks a random weapon but we won't model weapon use for bots to keep simple
+                        pickups.splice(i, 1);
+                    }
+                }
             });
+
+            // Damage from safe zone (outside)
+            const outsidePlayerDist = Math.hypot(player.x - safeZone.x, player.y - safeZone.y);
+            if (outsidePlayerDist > safeZone.radius + player.radius) {
+                // damage per frame based on delta (ms)
+                player.health -= (safeZone.damagePerSecond * (delta / 1000));
+                if (player.health <= 0) {
+                    player.health = 0;
+                    gameOver = true;
+                    showLose();
+                }
+            }
+
+            // Damage enemies if outside safe zone
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                const e = enemies[i];
+                const d = Math.hypot(e.x - safeZone.x, e.y - safeZone.y);
+                if (d > safeZone.radius + e.radius) {
+                    e.health -= (safeZone.damagePerSecond * (delta / 1000));
+                    if (e.health <= 0) enemies.splice(i, 1);
+                }
+            }
 
             // UI Update
             aliveCountUI.textContent = enemies.length + (player.health > 0 ? 1 : 0);
-            healthUI.textContent = Math.max(0, player.health);
+            healthUI.textContent = Math.max(0, Math.floor(player.health));
 
             if (enemies.length === 0 && player.health > 0) {
                 gameOver = true;
-                alert("🏆 BOOYAH! You are the Last One Standing! 🏆");
+                showWin();
             }
+        }
+
+        function drawSafeZone() {
+            // outer dark overlay
+            ctx.save();
+            ctx.fillStyle = 'rgba(0,0,0,0.45)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // cut out the safe zone circle
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.beginPath();
+            ctx.arc(safeZone.x, safeZone.y, safeZone.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.closePath();
+
+            // draw safe zone border
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.beginPath();
+            ctx.arc(safeZone.x, safeZone.y, safeZone.radius, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            ctx.closePath();
+            ctx.restore();
         }
 
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw pickups
+            pickups.forEach(p => {
+                ctx.beginPath();
+                ctx.fillStyle = p.type === 'rifle' ? '#00FF00' : (p.type === 'shotgun' ? '#FF00FF' : '#FFFF00');
+                ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+                ctx.closePath();
+            });
 
             // Draw Player
             if (player.health > 0) {
@@ -212,14 +380,54 @@
                 ctx.fill();
                 ctx.closePath();
             });
+
+            // Draw safe zone overlay on top
+            drawSafeZone();
+
+            // Draw mini UI indicators (safe zone distance)
+            ctx.beginPath();
+            ctx.fillStyle = 'rgba(255,255,255,0.9)';
+            ctx.font = '14px Arial';
+            const distToEdge = Math.max(0, Math.floor(Math.hypot(player.x - safeZone.x, player.y - safeZone.y) - safeZone.radius));
+            ctx.fillText('Outside zone: ' + distToEdge + 'px', 10, canvas.height - 10);
+            ctx.closePath();
         }
 
-        function loop() {
-            update();
+        function loop(now) {
+            if (!now) now = performance.now();
+            const delta = now - lastTime;
+            lastTime = now;
+
+            // allow holding mouse to shoot for faster weapons
+            if (!gameOver && (mouseDown || (player.weapon && player.weapon.name === 'Rifle'))) {
+                handleShooting(now);
+            }
+
+            update(delta);
             draw();
-            requestAnimationFrame(loop);
+
+            if (!gameOver) requestAnimationFrame(loop);
+            else restartBtn.style.display = 'inline-block';
         }
 
+        // mouse hold tracking
+        let mouseDown = false;
+        canvas.addEventListener('mousedown', () => mouseDown = true);
+        window.addEventListener('mouseup', () => mouseDown = false);
+
+        // Show win/lose
+        function showWin() {
+            setTimeout(() => alert('🏆 BOOYAH! You are the Last One Standing in Mini Free Fire! 🏆'), 50);
+        }
+        function showLose() {
+            setTimeout(() => alert('You died. Try again!'), 50);
+        }
+
+        restartBtn.addEventListener('click', () => {
+            resetGame();
+        });
+
+        // init loop
         loop();
     </script>
 </body>
